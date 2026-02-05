@@ -1,0 +1,144 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+
+'========================
+' 1) Controller side
+'========================
+package "Controller" {
+
+  interface IAimDirectionInput {
+    +onUdpPacket(p: AimPacket) : void
+  }
+
+  class ControllerApp {
+    -aimIn: IAimDirectionInput
+    -camera: ICameraForController
+    +tick(dt: float) : void
+  }
+
+  class UdpAimReceiver implements IAimDirectionInput {
+    -socket: UdpSocket
+    +onUdpPacket(p: AimPacket) : void
+  }
+
+  ControllerApp --> IAimDirectionInput : uses
+}
+
+'========================
+' 2) Adapter layer (Controller <-> Camera endpoint)
+'========================
+package "Camera Adapter Layer" {
+
+  interface ICameraForController {
+    +setAimDirection(dir: Vec3) : Ack
+    +setCameraMode(mode: Mode) : Ack
+    +start() : Ack
+    +stop() : Ack
+  }
+
+  class RealCameraAdapter implements ICameraForController {
+    -transport: UdpTransport
+    -endpoint: RealCameraEndpoint
+  }
+
+  class SimVCamAdapter implements ICameraForController {
+    -transport: UdpTransport
+    -endpoint: SimEndpoint
+  }
+}
+
+ControllerApp --> ICameraForController
+
+'========================
+' 3) Simulation module
+'========================
+package "Simulation Module" {
+
+  class SimulationCore {
+    -drone: Drone
+    -vcam: VCam
+    -target: ObservedObject
+    -aimTx: UdpAimTransmitter
+    -dumpTx: UdpEnvDumpTransmitter
+    +update(dt: float) : void
+  }
+
+  class Drone {
+    +pose: Pose
+  }
+
+  class VCam {
+    +pose: Pose
+    +fov: float
+    +mode: Mode
+    +setCommand(cmd: CamCommand) : void
+  }
+
+  class ObservedObject {
+    +pose: Pose
+  }
+
+  class UdpAimTransmitter {
+    -socket: UdpSocket
+    +sendAim(p: AimPacket) : void
+  }
+
+  class UdpEnvDumpTransmitter {
+    -socket: UdpSocket
+    +sendDump(d: EnvDumpPacket) : void
+  }
+
+  SimulationCore *-- Drone
+  SimulationCore *-- VCam
+  SimulationCore *-- ObservedObject
+  SimulationCore *-- UdpAimTransmitter
+  SimulationCore *-- UdpEnvDumpTransmitter
+}
+
+'========================
+' 4) Visualization module (UNIGINE black box)
+'========================
+package "Visualization (UNIGINE black box)" {
+
+  interface IEnvDumpInput {
+    +onUdpPacket(d: EnvDumpPacket) : void
+  }
+
+  class UnigineReceiver implements IEnvDumpInput {
+    -socket: UdpSocket
+    +onUdpPacket(d: EnvDumpPacket) : void
+  }
+
+  class UnigineApp {
+    -dumpIn: IEnvDumpInput
+    +renderTick(dt: float) : void
+  }
+
+  UnigineReceiver ..|> IEnvDumpInput
+  UnigineApp --> IEnvDumpInput : uses
+}
+
+'========================
+' Network relations (logical)
+'========================
+RealCameraAdapter ..> "Real Camera HW" : UDP control\n(Camera Protocol)
+SimVCamAdapter ..> SimulationCore : UDP control\n(Camera Protocol)
+
+SimulationCore ..> UdpAimReceiver : UDP AimPacket\n(direction-to-target)
+SimulationCore ..> UnigineReceiver : UDP EnvDumpPacket\n(environment dumps)
+
+note right of ICameraForController
+ICameraForController is the contract
+the Controller expects (camera-like behavior),
+independent of real or simulated source.
+end note
+
+note bottom of SimulationCore
+SimulationCore computes:
+- target direction (AimPacket) for Controller
+- environment dumps for UNIGINE
+VCam is commanded via Camera Protocol (through SimVCamAdapter).
+end note
+
+@enduml
